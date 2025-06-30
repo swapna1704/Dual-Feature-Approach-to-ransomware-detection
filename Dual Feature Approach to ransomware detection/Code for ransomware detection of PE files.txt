@@ -1,0 +1,147 @@
+!pip install catboost lightgbm scikit-learn pandas numpy matplotlib seaborn imbalanced-learn
+!pip install catboost lightgbm imbalanced-learn
+
+# Import required libraries
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, classification_report
+from catboost import CatBoostClassifier
+from lightgbm import LGBMClassifier
+from imblearn.over_sampling import SMOTE
+from google.colab import files
+
+# Step 1: Upload the dataset
+print("Ppl")
+uploaded = files.upload()
+
+# Get file name
+file_name = list(uploaded.keys())[0]
+
+# Load dataset with correct delimiter
+df = pd.read_csv(file_name, delimiter='|')
+
+# Display first few rows
+print("Dataset Preview:")
+display(df.head())
+
+# Remove duplicate rows (if any)
+df = df.drop_duplicates().reset_index(drop=True)
+
+# Check for missing values and fill them with median
+df.fillna(df.median(numeric_only=True), inplace=True)
+
+# Drop non-numeric columns (e.g., 'Name', 'md5')
+df = df.drop(columns=['Name', 'md5'], errors='ignore')
+
+# Encode categorical variables (if present)
+label_encoders = {}
+for col in df.select_dtypes(include=['object']).columns:
+    le = LabelEncoder()
+    df[col] = le.fit_transform(df[col])
+    label_encoders[col] = le
+
+# Define target column
+target_column = 'legitimate'
+
+# Ensure the target column is present
+if target_column not in df.columns:
+    raise ValueError(f"Target column '{target_column}' not found in dataset. Check column names.")
+
+# Define features (X) and target (y)
+X = df.drop(columns=[target_column])
+y = df[target_column]
+
+# Normalize numerical features
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Check class distribution
+print("\nClass Distribution:")
+print(y.value_counts(normalize=True))
+
+# If the dataset is imbalanced, apply SMOTE
+smote = SMOTE()
+X_resampled, y_resampled = smote.fit_resample(X_scaled, y)
+
+# Split the dataset into train and test sets
+X_train, X_test, y_train, y_test = train_test_split(
+    X_resampled, y_resampled, test_size=0.2, random_state=42, stratify=y_resampled)
+
+# Convert resampled data to DataFrame and add target column for display
+X_resampled_df = pd.DataFrame(X_resampled, columns=X.columns)
+X_resampled_df['legitimate'] = y_resampled
+
+# Show the first few rows of the processed dataset
+print("\nPreprocessed and Balanced Dataset Preview:")
+display(X_resampled_df.head())
+print("\nTraining CatBoost Model...")
+catboost_model = CatBoostClassifier(
+    iterations=500, depth=8, learning_rate=0.05, loss_function='Logloss', verbose=100
+)
+catboost_model.fit(X_train, y_train)
+print("\nTraining LightGBM Model...")
+lgbm_model = LGBMClassifier(
+    n_estimators=500, learning_rate=0.05, max_depth=6,
+    reg_alpha=0.1, reg_lambda=0.1, num_leaves=20, min_data_in_leaf=10
+)
+lgbm_model.fit(X_train, y_train)
+def evaluate_model(model, X_test, y_test, model_name):
+    y_pred = model.predict(X_test)
+
+    acc = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred)
+    recall = recall_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred)
+
+    print(f"\n{model_name} Performance:")
+    print(f"Accuracy: {acc:.4f}")
+    print(f"Precision: {precision:.4f}")
+    print(f"Recall: {recall:.4f}")
+    print(f"F1 Score: {f1:.4f}")
+
+    # Confusion Matrix
+    cm = confusion_matrix(y_test, y_pred)
+    plt.figure(figsize=(5, 5))
+    sns.heatmap(cm, annot=True, fmt='d', cmap="Blues", xticklabels=['Benign', 'Ransomware'], yticklabels=['Benign', 'Ransomware'])
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.title(f"{model_name} Confusion Matrix")
+    plt.show()
+
+# Evaluate both models
+evaluate_model(catboost_model, X_test, y_test, "CatBoost")
+evaluate_model(lgbm_model, X_test, y_test, "LightGBM")
+# Train accuracy
+train_preds = lgbm_model.predict(X_train)
+train_acc = accuracy_score(y_train, train_preds)
+
+# Test accuracy
+test_preds = lgbm_model.predict(X_test)
+test_acc = accuracy_score(y_test, test_preds)
+
+print(f"Training Accuracy: {train_acc:.4f}")
+print(f"Testing Accuracy: {test_acc:.4f}")
+
+feature_importance = pd.DataFrame({
+    'Feature': X.columns,
+    'Importance': lgbm_model.feature_importances_
+}).sort_values(by='Importance', ascending=False)
+
+plt.figure(figsize=(10, 6))
+sns.barplot(x=feature_importance['Importance'], y=feature_importance['Feature'])
+plt.title("Feature Importance - LightGBM")
+plt.show()
+print("\nTesting on New Sample Data...")
+sample_data = np.array(X_test[0]).reshape(1, -1)  # Take a sample test row
+catboost_prediction = catboost_model.predict(sample_data)
+lgbm_prediction = lgbm_model.predict(sample_data)
+
+print(f"CatBoost Prediction: {'Ransomware' if catboost_prediction[0] == 1 else 'Benign'}")
+print(f"LightGBM Prediction: {'Ransomware' if lgbm_prediction[0] == 1 else 'Benign'}")
+
+print("\nHybrid Ransomware Detection System Execution Complete ")
+
